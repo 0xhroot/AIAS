@@ -1,0 +1,153 @@
+<!-- dashboard/templates/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AIAF Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 12px; }
+    .container { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
+    button { padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h2>AIAF — Live Dashboard</h2>
+  <div class="container">
+    <div class="card">
+      <h3>Anomalies (last 10 minutes)</h3>
+      <canvas id="anomalyChart" height="120"></canvas>
+      <p><small>Auto-updates every 4s</small></p>
+    </div>
+
+    <div class="card">
+      <h3>Blocked IPs</h3>
+      <div id="blocks"></div>
+      <h4>Recent Events</h4>
+      <div style="max-height:300px; overflow:auto;">
+        <table id="eventsTable">
+          <thead><tr><th>Time</th><th>IP</th><th>Score</th><th>Decision</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+const CHART_UPDATE_MS = 4000;
+let chart;
+
+async function fetchEvents() {
+  const resp = await fetch('/api/events?n=200');
+  const j = await resp.json();
+  return j.events || [];
+}
+
+async function fetchBlocks() {
+  const resp = await fetch('/api/blocks');
+  const j = await resp.json();
+  return j.blocks || [];
+}
+
+function buildTimeBuckets(events) {
+  // build minute buckets for last 10 minutes
+  const now = Date.now();
+  const buckets = [];
+  for (let i=9;i>=0;i--){
+    const t = new Date(now - i*60*1000);
+    const key = t.getUTCFullYear() + '-' + (t.getUTCMonth()+1) + '-' + t.getUTCDate() + ' ' + t.getUTCHours() + ':' + String(t.getUTCMinutes()).padStart(2,'0');
+    buckets.push({key, count:0});
+  }
+  const keys = buckets.map(b=>b.key);
+  for (const e of events) {
+    const dt = new Date(e.timestamp);
+    const key = dt.getUTCFullYear() + '-' + (dt.getUTCMonth()+1) + '-' + dt.getUTCDate() + ' ' + dt.getUTCHours() + ':' + String(dt.getUTCMinutes()).padStart(2,'0');
+    const idx = keys.indexOf(key);
+    if (idx>=0 && e.decision && e.decision !== 'NORMAL') buckets[idx].count++;
+  }
+  return buckets;
+}
+
+function renderChart(buckets) {
+  const labels = buckets.map(b=>b.key.split(' ')[1]);
+  const data = buckets.map(b=>b.count);
+  if (!chart) {
+    const ctx = document.getElementById('anomalyChart').getContext('2d');
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Anomalies', data, fill: true, tension: 0.3 }] },
+      options: { animation: false, scales: { y: { beginAtZero: true, precision:0 } } }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.update();
+  }
+}
+
+function renderEventsTable(events) {
+  const tbody = document.querySelector("#eventsTable tbody");
+  tbody.innerHTML = "";
+  const max = 30;
+  for (let i = Math.max(0, events.length-max); i < events.length; i++) {
+    const e = events[i];
+    const tr = document.createElement("tr");
+    const ttd = document.createElement("td"); ttd.textContent = new Date(e.timestamp).toLocaleString(); tr.appendChild(ttd);
+    const tip = document.createElement("td"); tip.textContent = e.ip; tr.appendChild(tip);
+    const ts = document.createElement("td"); ts.textContent = Number(e.score).toFixed(3); tr.appendChild(ts);
+    const tddec = document.createElement("td"); tddec.textContent = e.decision; tr.appendChild(tddec);
+    tbody.appendChild(tr);
+  }
+}
+
+async function renderBlocks() {
+  const blocks = await fetchBlocks();
+  const div = document.getElementById("blocks");
+  div.innerHTML = "";
+  if (!blocks || blocks.length===0) {
+    div.innerHTML = "<p>No blocked IPs found</p>";
+    return;
+  }
+  const tbl = document.createElement("table");
+  tbl.style.width = "100%";
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>IP</th><th>Rule</th><th>Action</th></tr>";
+  tbl.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  for (const b of blocks) {
+    const tr = document.createElement("tr");
+    const iptd = document.createElement("td"); iptd.textContent = b.ip || "-"; tr.appendChild(iptd);
+    const rt = document.createElement("td"); rt.textContent = (b.rule || b.cmd || '-').substring(0,80); tr.appendChild(rt);
+    const acttd = document.createElement("td");
+    const btn = document.createElement("button"); btn.textContent = "Unblock"; btn.onclick = async ()=>{
+      btn.disabled = true;
+      await fetch('/api/unblock', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip: b.ip})});
+      setTimeout(renderAll, 1000);
+    };
+    acttd.appendChild(btn);
+    tr.appendChild(acttd);
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody);
+  div.appendChild(tbl);
+}
+
+async function renderAll() {
+  const events = await fetchEvents();
+  const buckets = buildTimeBuckets(events);
+  renderChart(buckets);
+  renderEventsTable(events);
+  renderBlocks();
+}
+
+// initial
+renderAll();
+// poll
+setInterval(renderAll, CHART_UPDATE_MS);
+
+</script>
+</body>
+</html>
