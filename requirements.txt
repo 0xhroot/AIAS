@@ -1,8 +1,0 @@
-scapy==2.5.0
-pandas
-scikit-learn
-numpy
-joblib
-python-dateutil
-psutil
-flask      
