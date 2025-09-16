@@ -1,0 +1,263 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AIAF Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 18px; background: #f7fafc; color:#0f172a; }
+    header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+    h2 { margin:0; font-size:20px; }
+    .controls { display:flex; gap:10px; align-items:center; }
+    .status { font-size:14px; color:#334155; padding:6px 10px; background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
+    .container { display:grid; grid-template-columns: 1.2fr 1fr; gap:20px; }
+    .card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 12px rgba(0,0,0,0.06); }
+    table { width:100%; border-collapse: collapse; font-size:13px; }
+    th, td { padding:8px 10px; border-bottom:1px solid #eef2f7; text-align:left; }
+    th { background:#f8fafc; color:#475569; font-weight:600; font-size:12px; }
+    button { padding:6px 12px; border:none; background:#ef4444; color:#fff; border-radius:8px; cursor:pointer; font-weight:600; }
+    button.secondary { background:#0ea5a4; }
+    .muted { color:#64748b; font-size:13px; }
+    .small { font-size:13px; color:#64748b; }
+    .row { display:flex; gap:10px; align-items:center; }
+    textarea { width:100%; height:140px; font-family:monospace; font-size:12px; }
+    .badge-susp { background:#fef3c7; color:#92400e; padding:4px 8px; border-radius:8px; }
+    .badge-block { background:#fecaca; color:#7f1d1d; padding:4px 8px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>AIAF — Live Dashboard</h2>
+    <div class="controls">
+      <div class="status" id="statusText">Checking...</div>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="card">
+      <h3 style="margin-top:0;">Anomalies & Events</h3>
+      <canvas id="anomalyChart" height="120"></canvas>
+      <p class="muted"><small>Auto-updates every 4s — only SUSPICIOUS / BLOCKED events shown</small></p>
+
+      <h4 style="margin-top:12px;">Recent AIAF Events</h4>
+      <div style="max-height:200px; overflow:auto;">
+        <table id="eventsTable">
+          <thead><tr><th>Time</th><th>IP</th><th>Score</th><th>Decision</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Honeypot</h3>
+
+      <div class="row" style="margin-bottom:8px;">
+        <label style="font-size:13px;">Interface (for monitor): <input id="ifaceInput" value="wlan0" style="padding:6px;border-radius:6px;border:1px solid #e2e8f0;"></label>
+      </div>
+
+      <div class="row" style="margin-bottom:8px;">
+        <button id="hpStart" class="secondary">Start Honeypot</button>
+        <button id="hpStop">Stop Honeypot</button>
+        <label style="margin-left:8px;"><input type="checkbox" id="autoRetrainChk"> Auto-Retrain</label>
+      </div>
+
+      <div style="margin-bottom:8px;">
+        <button id="manualRetrain">Run Manual Retrain</button>
+      </div>
+
+      <h4 style="margin-top:12px;">Honeypot Events (last 200)</h4>
+      <div style="max-height:200px; overflow:auto;">
+        <table id="hpEventsTable">
+          <thead><tr><th>Time</th><th>Src IP</th><th>Dst Port</th><th>Preview</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h4 style="margin-top:12px;">Retrain Log</h4>
+      <div style="max-height:220px; overflow:auto;">
+        <textarea id="retrainLog" readonly placeholder="Retrain log output will appear here..."></textarea>
+      </div>
+
+      <h4 style="margin-top:8px;">Retrain History</h4>
+      <div id="retrainHistory" style="max-height:120px; overflow:auto; font-size:13px; color:#334155;"></div>
+    </div>
+  </div>
+
+<script>
+const CHART_UPDATE_MS = 4000;
+let chart;
+
+async function fetchJSON(path, opts) {
+  try {
+    const r = await fetch(path, opts);
+    return await r.json();
+  } catch (e) {
+    console.error("fetch fail", path, e);
+    return null;
+  }
+}
+
+/* helpers */
+function parseISO(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  return isNaN(d) ? null : d;
+}
+function minuteKey(dt) { return String(dt.getHours()).padStart(2,'0')+":"+String(dt.getMinutes()).padStart(2,'0'); }
+
+/* fetchers */
+async function fetchEvents() {
+  const j = await fetchJSON('/api/events?n=500');
+  return j ? (j.events || []) : [];
+}
+async function fetchHpEvents() {
+  const j = await fetchJSON('/api/honeypot/events?n=200');
+  return j ? (j.events || []) : [];
+}
+async function fetchStatus() {
+  const j = await fetchJSON('/api/honeypot/status') || {};
+  const s = document.getElementById("statusText");
+  if (j && j.running) {
+    s.textContent = "Honeypot running (pid:"+j.pid+")";
+    s.style.background="#ecfdf5"; s.style.color="#065f46";
+  } else {
+    s.textContent = "Stopped";
+    s.style.background="#fff7ed"; s.style.color="#92400e";
+  }
+}
+
+/* events table rendering - highlight suspicious/blocked */
+function renderEventsTable(events) {
+  const tbody = document.querySelector("#eventsTable tbody");
+  tbody.innerHTML = "";
+  const last = events.slice(-60);
+  for (const e of last.reverse()) {
+    const tr = document.createElement("tr");
+    if (e.decision === "SUSPICIOUS") tr.style.background = "#fffbeb";
+    if (e.decision === "BLOCKED") tr.style.background = "#fff1f2";
+
+    const dt = parseISO(e.timestamp);
+    const tdTime = document.createElement("td"); tdTime.textContent = dt ? dt.toLocaleString(): "-"; tr.appendChild(tdTime);
+    const tdIp = document.createElement("td"); tdIp.textContent = e.ip || "-"; tr.appendChild(tdIp);
+    const tdScore = document.createElement("td"); tdScore.textContent = (e.score!==undefined && e.score!==null) ? Number(e.score).toFixed(3) : "-"; tr.appendChild(tdScore);
+    const tdDec = document.createElement("td");
+    tdDec.textContent = e.decision || "-";
+    if (e.decision === "SUSPICIOUS") tdDec.innerHTML = `<span class="badge-susp">${tdDec.textContent}</span>`;
+    if (e.decision === "BLOCKED") tdDec.innerHTML = `<span class="badge-block">${tdDec.textContent}</span>`;
+    tr.appendChild(tdDec);
+    tbody.appendChild(tr);
+  }
+}
+
+/* build minute buckets but count only SUSPICIOUS/BLOCKED */
+function buildChartBuckets(events) {
+  const now = Date.now();
+  const buckets = [];
+  for (let i=9; i>=0; i--) {
+    const t = new Date(now - i*60*1000);
+    buckets.push({k: minuteKey(t), c:0});
+  }
+  const keys = buckets.map(x=>x.k);
+  for (const e of events) {
+    const dt = parseISO(e.timestamp);
+    if (!dt) continue;
+    const k = minuteKey(dt);
+    const idx = keys.indexOf(k);
+    if (idx < 0) continue;
+    if (e.decision === "SUSPICIOUS" || e.decision === "BLOCKED") buckets[idx].c++;
+  }
+  return buckets;
+}
+
+function renderChart(buckets) {
+  const labels = buckets.map(b=>b.k);
+  const data = buckets.map(b=>b.c);
+  const ctx = document.getElementById("anomalyChart").getContext("2d");
+  if (!chart) {
+    chart = new Chart(ctx, { type:'line', data:{ labels, datasets:[
+      { label:'Suspicious/Blocked per minute', data, borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.16)', fill:true, tension:0.3 }
+    ] }, options:{ animation:false, plugins:{legend:{display:false}}, scales:{ y:{beginAtZero:true, precision:0} }}} );
+  } else {
+    chart.data.labels = labels; chart.data.datasets[0].data = data; chart.update();
+  }
+}
+
+/* honeypot UI rendering */
+function renderHpEvents(events) {
+  const tbody = document.querySelector("#hpEventsTable tbody");
+  tbody.innerHTML = "";
+  for (const e of events.slice(-200).reverse()) {
+    const tr = document.createElement("tr");
+    const dt = parseISO(e.timestamp);
+    const t1 = document.createElement("td"); t1.textContent = dt ? dt.toLocaleString() : "-"; tr.appendChild(t1);
+    const t2 = document.createElement("td"); t2.textContent = e.src_ip || e.ip || "-"; tr.appendChild(t2);
+    const t3 = document.createElement("td"); t3.textContent = e.dst_port || e.port || "-"; tr.appendChild(t3);
+    const t4 = document.createElement("td"); t4.textContent = (e.data_preview||"").slice(0,120); tr.appendChild(t4);
+    tbody.appendChild(tr);
+  }
+}
+
+async function refreshRetrainLog() {
+  const j = await fetchJSON('/api/honeypot/retrain_status');
+  if (j && j.log !== undefined) {
+    document.getElementById("retrainLog").value = j.log;
+  }
+}
+async function refreshRetrainHistory() {
+  const j = await fetchJSON('/api/honeypot/retrain_history');
+  const div = document.getElementById("retrainHistory");
+  div.innerHTML = "";
+  if (j && j.history) {
+    for (const h of j.history.slice(0,20)) {
+      const d = new Date((h.ts||0)*1000);
+      const line = document.createElement("div");
+      line.textContent = `${d.toLocaleString()} - ${h.action} ${h.pid ? '(pid:'+h.pid+')':''} ${h.enabled !== undefined ? ('enabled:'+h.enabled) : ''}`;
+      div.appendChild(line);
+    }
+  }
+}
+
+/* control bindings */
+document.getElementById("hpStart").addEventListener("click", async ()=>{
+  const j = await fetchJSON('/api/honeypot/start', { method: 'POST' });
+  if (!j || !j.ok) alert("start failed: " + (j && j.error));
+  setTimeout(loopOnce, 800);
+});
+document.getElementById("hpStop").addEventListener("click", async ()=>{
+  const j = await fetchJSON('/api/honeypot/stop', { method: 'POST' });
+  if (!j || !j.ok) alert("stop failed: " + (j && j.error));
+  setTimeout(loopOnce, 800);
+});
+document.getElementById("manualRetrain").addEventListener("click", async ()=>{
+  const j = await fetchJSON('/api/honeypot/retrain', { method:'POST' });
+  if (!j || !j.ok) alert("retrain start failed: " + (j && j.error));
+  setTimeout(()=>{ refreshRetrainLog(); refreshRetrainHistory(); }, 1000);
+});
+document.getElementById("autoRetrainChk").addEventListener("change", async (ev)=>{
+  const on = ev.target.checked;
+  const j = await fetchJSON('/api/honeypot/auto_retrain', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ enable: on }) });
+  if (!j || !j.ok) alert("toggle failed");
+  setTimeout(refreshRetrainHistory, 300);
+});
+
+/* main refresh loop */
+async function loopOnce() {
+  const eventsResp = await fetchJSON('/api/events?n=500');
+  const events = eventsResp ? (eventsResp.events || []) : [];
+  renderEventsTable(events);
+  const buckets = buildChartBuckets(events);
+  renderChart(buckets);
+
+  const hp = await fetchHpEvents();
+  renderHpEvents(hp);
+
+  await fetchStatus();
+  await refreshRetrainLog();
+  await refreshRetrainHistory();
+}
+
+loopOnce();
+setInterval(loopOnce, CHART_UPDATE_MS);
+</script>
+</body>
+</html>
