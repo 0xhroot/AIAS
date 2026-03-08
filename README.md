@@ -344,7 +344,9 @@ python dashboard/app.py
 
 <img width="1833" height="883" alt="Shot-2025-09-12-225210" src="https://github.com/user-attachments/assets/7c6820f5-30a9-4ef6-964f-084c6736c777" />
 
-[![GitHub](https://img.shields.io/badge/GitHub-0xhroot-181717?style=for-the-badge&logo=github)](https://github.com/0xhroot)
+<img width="1833" height="883" alt="Shot-2025-09-12-225210" src="https://github.com/user-attachments/assets/30c821a2-e997-40b0-9283-f32a0b68a6c6" />
+
+
 
 
 > ⚠️ **Always use `--dry-run` until you are confident in your environment. Test live enforcement only in an isolated lab VM.**
@@ -442,8 +444,6 @@ and/or sell copies, subject to the MIT license conditions.
 
 *Rules are for firewalls. Learning is for AIAS.*
 
+[![GitHub](https://img.shields.io/badge/GitHub-0xhroot-181717?style=for-the-badge&logo=github)](https://github.com/0xhroot)
 
 </div>
-
-
-<img width="1833" height="883" alt="Shot-2025-09-12-225210" src="https://github.com/user-attachments/assets/30c821a2-e997-40b0-9283-f32a0b68a6c6" />
