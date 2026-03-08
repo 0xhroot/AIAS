@@ -404,19 +404,6 @@ python dashboard/app.py
 
 ---
 
-## 📸 Screenshots
-
-> Add your dashboard screenshots here following the same pattern as below.
-
-```markdown
-<div align="center">
-  <img src="screenshots/dashboard.png" width="48%" />
-  <img src="screenshots/events.png" width="48%" />
-</div>
-```
-
----
-
 ## 🚀 Releases
 
 ### v1.0.0 — AIAF Complete Release
